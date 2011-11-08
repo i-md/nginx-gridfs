@@ -705,7 +705,8 @@ static ngx_str_t ngx_substr(ngx_pool_t *pool, u_char* str, int start, int len) {
 
 static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
                                          ngx_file_t* tempfile,
-                                         ngx_str_t* gridfs_cache_filename) {
+                                         ngx_str_t* gridfs_cache_filename,
+					 bson_date_t date) {
   /* let nginx to close temp file, is it safe ? */
   //      ngx_close_file(tempfile.fd);
 
@@ -718,7 +719,11 @@ static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
                   "can't rename file from %s to %s.\n",
                   tempfile->name.data,
                   gridfs_cache_filename->data);
-  };
+  } else {
+    ngx_int_t err = ngx_set_file_time(gridfs_cache_filename->data,
+				      -1, /* useless */
+				      date / 1000 /* seconds */);
+  }
 }
 
 static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
@@ -858,7 +863,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         bson_append_oid(&buf, (char*)gridfs_conf->field.data, &oid);
         break;
     case bson_int:
-      bson_append_int(&buf, (char*)gridfs_conf->field.data, ngx_atoi((u_char*)value, strlen(value)));
+        bson_append_int(&buf, (char*)gridfs_conf->field.data, ngx_atoi((u_char*)value, strlen(value)));
         break;
     case bson_string:
         bson_append_string(&buf, (char*)gridfs_conf->field.data, value);
@@ -904,6 +909,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     chunksize = gridfile_get_chunksize(&gfile);
     numchunks = gridfile_get_numchunks(&gfile);
     contenttype = (char*)gridfile_get_contenttype(&gfile);
+    bson_date_t uploaddate = gridfile_get_uploaddate(&gfile);
 
     // ---------- SEND THE HEADERS ---------- //
 
@@ -964,7 +970,10 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         }
 
         if (tempfile_offset >= 0) {
-          ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
+          ngx_http_gridfs_rename_cache(request,
+				       &tempfile,
+				       &gridfs_cache_path,
+				       uploaddate);
         }
         buffer->pos = NULL;
         buffer->last = NULL;
@@ -1064,7 +1073,10 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         }
     }
 
-    if (tempfile_offset >= 0) ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
+    if (tempfile_offset >= 0) ngx_http_gridfs_rename_cache(request,
+							   &tempfile,
+							   &gridfs_cache_path,
+							   uploaddate);
 
     gridfile_destroy(&gfile);
     gridfs_destroy(&gfs);
