@@ -230,6 +230,10 @@ static char* ngx_http_gridfs(ngx_conf_t* cf, ngx_command_t* command, void* void_
     value = cf->args->elts;
     gridfs_loc_conf->db = value[1];
 
+    /*
+      Todo: will reuse core_module's "root" directive, need sanity check of the value.
+    */
+
     /* Parse the parameters */
     for (i = 2; i < cf->args->nelts; i++) {
         if (ngx_strncmp(value[i].data, "root_collection=", 16) == 0) { 
@@ -254,7 +258,7 @@ static char* ngx_http_gridfs(ngx_conf_t* cf, ngx_command_t* command, void* void_
             continue;
         }
 
-        if (ngx_strncmp(value[i].data, "type=", 5) == 0) { 
+        if (ngx_strncmp(value[i].data, "type=", 5) == 0) {
             type = (ngx_str_t) ngx_string(&value[i].data[5]);
 
             /* Currently only support for "objectid", "string", and "int" */
@@ -275,7 +279,7 @@ static char* ngx_http_gridfs(ngx_conf_t* cf, ngx_command_t* command, void* void_
             continue;
         }
 
-        if (ngx_strncmp(value[i].data, "user=", 5) == 0) { 
+        if (ngx_strncmp(value[i].data, "user=", 5) == 0) {
             gridfs_loc_conf->user.data = (u_char *) &value[i].data[5];
             gridfs_loc_conf->user.len = ngx_strlen(&value[i].data[5]);
             continue;
@@ -624,12 +628,11 @@ static ngx_int_t ngx_http_mongo_reauth(ngx_log_t *log, ngx_http_mongo_connection
         if (!success) {
             ngx_log_error(NGX_LOG_ERR, log, 0,
                           "Invalid mongo user/pass: %s/%s, during reauth", 
-                          auths[i].user.data, 
-                          auths[i].pass.data);   
+                          auths[i].user.data,
+                          auths[i].pass.data);
             return NGX_ERROR;
         }
     }
-    
     return NGX_OK;
 }
 
@@ -669,6 +672,55 @@ static int url_decode(char * filename) {
     return 1;
 }
 
+static ngx_str_t ngx_str_concat(ngx_pool_t *pool, int c, char* str[]) {
+  ngx_str_t ret;
+
+  ret.len = 0;
+  for (int i = 0; i < c; ++i) {
+    ret.len += ngx_strlen(str[i]);
+  }
+  u_char* s = (u_char*) ngx_palloc(pool, ret.len + 1);
+  ret.data = s;
+  for (int i = 0; i < c; ++i) {
+    int l = ngx_strlen(str[i]);
+    ngx_memcpy(s, str[i], l);
+    s += l;
+  }
+  *s = '\0';
+
+  return ret;
+}
+
+static ngx_str_t ngx_substr(ngx_pool_t *pool, u_char* str, int start, int len) {
+  ngx_str_t ret;
+
+  ret.len = len;
+  ret.data = (u_char*) ngx_palloc(pool, ret.len + 1);
+  if (ret.data == NULL) return ret;
+
+  ngx_memcpy(ret.data, str + start, len);
+  *(ret.data + len) = '\0';
+  return ret;
+}
+
+static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
+					 ngx_file_t* tempfile,
+					 ngx_str_t* gridfs_cache_filename) {
+  /* let nginx to close temp file, is it safe ? */
+  //      ngx_close_file(tempfile.fd);
+
+  ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		"rename file from %s to %s.\n",
+		tempfile->name.data,
+		gridfs_cache_filename->data);
+  if (ngx_rename_file(tempfile->name.data, gridfs_cache_filename->data) != 0) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+		  "can't rename file from %s to %s.\n",
+		  tempfile->name.data,
+		  gridfs_cache_filename->data);
+  };
+}
+
 static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     ngx_http_gridfs_loc_conf_t* gridfs_conf;
     ngx_http_core_loc_conf_t* core_conf;
@@ -697,33 +749,15 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     bson chunk;
     ngx_pool_cleanup_t* gridfs_cln;
     ngx_http_gridfs_cleanup_t* gridfs_clndata;
-    volatile ngx_uint_t e = FALSE; 
+    volatile ngx_uint_t e = FALSE;
     volatile ngx_uint_t ecounter = 0;
 
     gridfs_conf = ngx_http_get_module_loc_conf(request, ngx_http_gridfs_module);
     core_conf = ngx_http_get_module_loc_conf(request, ngx_http_core_module);
 
-    // ---------- ENSURE MONGO CONNECTION ---------- //
-
-    mongo_conn = ngx_http_get_mongo_connection( gridfs_conf->mongo );
-    if (mongo_conn == NULL) {
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Mongo Connection not found: \"%V\"", &gridfs_conf->mongo);
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    
-    if ( !(&mongo_conn->conn.connected)
-         && (ngx_http_mongo_reconnect(request->connection->log, mongo_conn) == NGX_ERROR
-             || ngx_http_mongo_reauth(request->connection->log, mongo_conn) == NGX_ERROR)) {
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Could not connect to mongo: \"%V\"", &gridfs_conf->mongo);
-        if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
-        return NGX_HTTP_SERVICE_UNAVAILABLE;
-    }
-
-
     // ---------- RETRIEVE KEY ---------- //
 
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, "Start to retrieve path.");
     location_name = core_conf->name;
     full_uri = request->uri;
 
@@ -733,24 +767,70 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    value = (char*)malloc(sizeof(char) * (full_uri.len - location_name.len + 1));
+    ngx_str_t gridfspath = ngx_substr(request->pool, full_uri.data,
+                                      location_name.len - 1,
+                                      full_uri.len - location_name.len + 1);
+    if (gridfspath.data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for gridfs path.");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    // Resource path.
+    ngx_str_t ngx_value = ngx_substr(request->pool, gridfspath.data, 1, gridfspath.len - 1);
+    value = (char*) ngx_value.data;
     if (value == NULL) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                       "Failed to allocate memory for value buffer.");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    memcpy(value, full_uri.data + location_name.len, full_uri.len - location_name.len);
-    value[full_uri.len - location_name.len] = '\0';
-
     if (!url_decode(value)) {
+      //        free(value);
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                       "Malformed request.");
-        free(value);
         return NGX_HTTP_BAD_REQUEST;
+    }
+
+    char* path_parts[] = { (char*) core_conf->root.data, "/", value };
+    ngx_str_t gridfs_cache_path = ngx_str_concat(request->pool, 3, path_parts);
+    if (gridfs_cache_path.data == NULL) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "Failed to allocate memory for gridfs cache path.");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    ngx_file_info_t gfs_cache_fi;
+    // let default handler to return static file.
+    if (ngx_file_info(gridfs_cache_path.data, &gfs_cache_fi) != NGX_FILE_ERROR &&
+        ngx_is_file(&gfs_cache_fi)) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                   "Hit gridfs cache: %s\n", gridfs_cache_path.data);
+      request->uri = gridfspath;
+      return NGX_DECLINED;
+    }
+
+    // ---------- ENSURE MONGO CONNECTION ---------- //
+
+    mongo_conn = ngx_http_get_mongo_connection( gridfs_conf->mongo );
+    if (mongo_conn == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Mongo Connection not found: \"%V\"", &gridfs_conf->mongo);
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    if ( !(&mongo_conn->conn.connected)
+         && (ngx_http_mongo_reconnect(request->connection->log, mongo_conn) == NGX_ERROR
+             || ngx_http_mongo_reauth(request->connection->log, mongo_conn) == NGX_ERROR)) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Could not connect to mongo: \"%V\"", &gridfs_conf->mongo);
+        if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
+        return NGX_HTTP_SERVICE_UNAVAILABLE;
     }
 
     // ---------- RETRIEVE GRIDFILE ---------- //
 
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "Start to init gridfs.");
     do {
         MONGO_TRY_GENERIC(&mongo_conn->conn){
             e = FALSE;
@@ -786,29 +866,33 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     }
     bson_from_buffer(&query, &buf);
 
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "Start to query gridfs.");
     do {
         MONGO_TRY_GENERIC(&mongo_conn->conn){
             e = FALSE;
             found = gridfs_find_query(&gfs, &query, &gfile);
         } MONGO_CATCH_GENERIC(&mongo_conn->conn) {
             e = TRUE; ecounter++;
-            if (ecounter > MONGO_MAX_RETRIES_PER_REQUEST 
+            if (ecounter > MONGO_MAX_RETRIES_PER_REQUEST
                 || ngx_http_mongo_reconnect(request->connection->log, mongo_conn) == NGX_ERROR
                 || ngx_http_mongo_reauth(request->connection->log, mongo_conn) == NGX_ERROR) {
                 ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                               "Mongo connection dropped, could not reconnect");
                 if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
                 bson_destroy(&query);
-                free(value);
+                //                free(value);
                 return NGX_HTTP_SERVICE_UNAVAILABLE;
             }
         }
     } while (e);
-    
+
     bson_destroy(&query);
-    free(value);
+    //    free(value);
 
     if(!found){
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "can't found file.");
         return NGX_HTTP_NOT_FOUND;
     }
 
@@ -846,6 +930,22 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
 
     // ---------- SEND THE BODY ---------- //
 
+    volatile long tempfile_offset = -1;
+    ngx_file_t tempfile;
+    ngx_err_t create_error = ngx_create_full_path(gridfs_cache_path.data, 0755);
+    if (create_error == 0) {
+      ngx_create_temp_file(&tempfile,
+                           core_conf->client_body_temp_path,
+                           request->pool,
+                           1, /* persistent */
+                           0, /* clean */
+                           0644);
+      tempfile_offset = 0;
+    } else {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "can't create path for: %s", gridfs_cache_path.data );
+    }
+
     /* Empty file */
     if (numchunks == 0) {
         /* Allocate space for the response buffer */
@@ -856,6 +956,9 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
+	if (tempfile_offset >= 0) {
+	  ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
+	}
         buffer->pos = NULL;
         buffer->last = NULL;
         buffer->memory = 1;
@@ -864,12 +967,11 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         out.next = NULL;
         return ngx_http_output_filter(request, &out);
     }
-    
+
     cursors = (mongo_cursor **)ngx_pcalloc(request->pool, sizeof(mongo_cursor *) * numchunks);
     if (cursors == NULL) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    
     ngx_memzero( cursors, sizeof(mongo_cursor *) * numchunks);
 
     /* Hook in the cleanup function */
@@ -901,7 +1003,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
                 mongo_cursor_next(cursors[i]);
             } MONGO_CATCH_GENERIC(&mongo_conn->conn) {
                 e = TRUE; ecounter++;
-                if (ecounter > MONGO_MAX_RETRIES_PER_REQUEST 
+                if (ecounter > MONGO_MAX_RETRIES_PER_REQUEST
                     || ngx_http_mongo_reconnect(request->connection->log, mongo_conn) == NGX_ERROR
                     || ngx_http_mongo_reauth(request->connection->log, mongo_conn) == NGX_ERROR) {
                     ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
@@ -928,12 +1030,18 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         /* Serve the Chunk */
         rc = ngx_http_output_filter(request, &out);
 
+        if (tempfile_offset >= 0) {
+          ngx_write_file(&tempfile, (u_char*) chunk_data, chunk_len, tempfile_offset);
+          tempfile_offset += chunk_len;
+        }
+
         /* TODO: More Codes to Catch? */
         if (rc == NGX_ERROR) {
             return NGX_ERROR;
         }
     }
 
+    if (tempfile_offset >= 0) ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
     return rc;
 }
 
