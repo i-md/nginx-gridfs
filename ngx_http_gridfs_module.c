@@ -956,6 +956,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         /* Allocate space for the response buffer */
         buffer = ngx_pcalloc(request->pool, sizeof(ngx_buf_t));
         if (buffer == NULL) {
+            gridfile_destroy(&gfile);
+            gridfs_destroy(&gfs);
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                           "Failed to allocate response buffer");
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
