@@ -704,20 +704,20 @@ static ngx_str_t ngx_substr(ngx_pool_t *pool, u_char* str, int start, int len) {
 }
 
 static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
-					 ngx_file_t* tempfile,
-					 ngx_str_t* gridfs_cache_filename) {
+                                         ngx_file_t* tempfile,
+                                         ngx_str_t* gridfs_cache_filename) {
   /* let nginx to close temp file, is it safe ? */
   //      ngx_close_file(tempfile.fd);
 
   ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		"rename file from %s to %s.\n",
-		tempfile->name.data,
-		gridfs_cache_filename->data);
+                "rename file from %s to %s.\n",
+                tempfile->name.data,
+                gridfs_cache_filename->data);
   if (ngx_rename_file(tempfile->name.data, gridfs_cache_filename->data) != 0) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-		  "can't rename file from %s to %s.\n",
-		  tempfile->name.data,
-		  gridfs_cache_filename->data);
+                  "can't rename file from %s to %s.\n",
+                  tempfile->name.data,
+                  gridfs_cache_filename->data);
   };
 }
 
@@ -882,6 +882,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
                 if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
                 bson_destroy(&query);
                 //                free(value);
+                gridfs_destroy(&gfs);
                 return NGX_HTTP_SERVICE_UNAVAILABLE;
             }
         }
@@ -891,9 +892,11 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     //    free(value);
 
     if(!found){
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                  "can't found file.");
-        return NGX_HTTP_NOT_FOUND;
+      gridfile_destroy(&gfile);
+      gridfs_destroy(&gfs);
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "can't found file in mongdb.");
+      return NGX_HTTP_NOT_FOUND;
     }
 
     /* Get information about the file */
@@ -917,6 +920,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, gridfile_get_field(&gfile,"gzipped") );
         request->headers_out.content_encoding = ngx_list_push(&request->headers_out.headers);
         if (request->headers_out.content_encoding == NULL) {
+            gridfile_destroy(&gfile);
+            gridfs_destroy(&gfs);
             return NGX_ERROR;
         }
         request->headers_out.content_encoding->hash = 1;
@@ -956,20 +961,27 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
-	if (tempfile_offset >= 0) {
-	  ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
-	}
+        if (tempfile_offset >= 0) {
+          ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
+        }
         buffer->pos = NULL;
         buffer->last = NULL;
         buffer->memory = 1;
         buffer->last_buf = 1;
         out.buf = buffer;
         out.next = NULL;
+
+        gridfile_destroy(&gfile);
+        gridfs_destroy(&gfs);
+
         return ngx_http_output_filter(request, &out);
     }
 
     cursors = (mongo_cursor **)ngx_pcalloc(request->pool, sizeof(mongo_cursor *) * numchunks);
     if (cursors == NULL) {
+      gridfile_destroy(&gfile);
+      gridfs_destroy(&gfs);
+
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     ngx_memzero( cursors, sizeof(mongo_cursor *) * numchunks);
@@ -977,6 +989,9 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     /* Hook in the cleanup function */
     gridfs_cln = ngx_pool_cleanup_add(request->pool, sizeof(ngx_http_gridfs_cleanup_t));
     if (gridfs_cln == NULL) {
+      gridfile_destroy(&gfile);
+      gridfs_destroy(&gfs);
+
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     gridfs_cln->handler = ngx_http_gridfs_cleanup;
@@ -992,6 +1007,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         if (buffer == NULL) {
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                           "Failed to allocate response buffer");
+            gridfile_destroy(&gfile);
+            gridfs_destroy(&gfs);
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
@@ -1009,6 +1026,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
                     ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                                   "Mongo connection dropped, could not reconnect");
                     if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
+                    gridfile_destroy(&gfile);
+                    gridfs_destroy(&gfs);
                     return NGX_HTTP_SERVICE_UNAVAILABLE;
                 }
             }
@@ -1037,11 +1056,17 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
 
         /* TODO: More Codes to Catch? */
         if (rc == NGX_ERROR) {
+            gridfile_destroy(&gfile);
+            gridfs_destroy(&gfs);
             return NGX_ERROR;
         }
     }
 
     if (tempfile_offset >= 0) ngx_http_gridfs_rename_cache(request, &tempfile, &gridfs_cache_path);
+
+    gridfile_destroy(&gfile);
+    gridfs_destroy(&gfs);
+
     return rc;
 }
 
