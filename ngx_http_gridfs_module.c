@@ -768,6 +768,14 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         return NGX_HTTP_BAD_REQUEST;
     }
 
+    char* path_parts[] = { (char*) core_conf->root.data, "/", value };
+    ngx_str_t gridfs_cache_path = ngx_str_concat(request->pool, 3, path_parts);
+    if (gridfs_cache_path.data == NULL) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "Failed to allocate memory for gridfs cache path.");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
     // ---------- ENSURE MONGO CONNECTION ---------- //
 
     mongo_conn = ngx_http_get_mongo_connection( gridfs_conf->mongo );
@@ -865,21 +873,15 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     contenttype = (char*)gridfile_get_contenttype(&gfile);
     int uploaddate = gridfile_get_uploaddate(&gfile) / 1000;
 
-    char* path_parts[] = { (char*) core_conf->root.data, "/", value };
-    ngx_str_t gridfs_cache_path = ngx_str_concat(request->pool, 3, path_parts);
-    if (gridfs_cache_path.data == NULL) {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for gridfs cache path.");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
     ngx_file_info_t gfs_cache_fi;
     if (ngx_file_info(gridfs_cache_path.data, &gfs_cache_fi) != NGX_FILE_ERROR &&
         ngx_is_file(&gfs_cache_fi)) {
-      // Let default handler to return static file.
       if (ngx_file_mtime(&gfs_cache_fi) == uploaddate) {
+	// Let default handler to return static file.
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                       "Hit gridfs cache: %s\n", gridfs_cache_path.data);
+        gridfile_destroy(&gfile);
+        gridfs_destroy(&gfs);
         request->uri = gridfspath;
         return NGX_DECLINED;
       } else {
