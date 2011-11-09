@@ -422,9 +422,6 @@ ngx_http_mongo_connection_t* ngx_http_get_mongo_connection( ngx_str_t name ) {
 static ngx_int_t ngx_http_mongo_authenticate(ngx_log_t *log, ngx_http_gridfs_loc_conf_t *gridfs_loc_conf) {
     ngx_http_mongo_connection_t* mongo_conn;
     ngx_http_mongo_auth_t *mongo_auth;
-    bson empty;
-    char *test;
-    int error;
 
     mongo_conn = ngx_http_get_mongo_connection( gridfs_loc_conf->mongo );
     if (mongo_conn == NULL) {
@@ -434,34 +431,10 @@ static ngx_int_t ngx_http_mongo_authenticate(ngx_log_t *log, ngx_http_gridfs_loc
 
     // Authenticate
     if (gridfs_loc_conf->user.data != NULL && gridfs_loc_conf->pass.data != NULL) {
-        if (!mongo_cmd_authenticate( &mongo_conn->conn, 
-                                     (const char*)gridfs_loc_conf->db.data, 
-                                     (const char*)gridfs_loc_conf->user.data, 
-                                     (const char*)gridfs_loc_conf->pass.data )) {
-            ngx_log_error(NGX_LOG_ERR, log, 0,
-                          "Invalid mongo user/pass: %s/%s", 
-                          gridfs_loc_conf->user.data, 
-                          gridfs_loc_conf->pass.data);
-            return NGX_ERROR;
-        }
-
         mongo_auth = ngx_array_push(mongo_conn->auths);
         mongo_auth->db = gridfs_loc_conf->db;
         mongo_auth->user = gridfs_loc_conf->user;
         mongo_auth->pass = gridfs_loc_conf->pass;
-    }
-
-    // Run a test command to test authentication.
-    test = (char*)malloc( gridfs_loc_conf->db.len + sizeof(".test"));
-    ngx_cpystrn((u_char*)test, (u_char*)gridfs_loc_conf->db.data, gridfs_loc_conf->db.len+1);
-    ngx_cpystrn((u_char*)(test+gridfs_loc_conf->db.len),(u_char*)".test", sizeof(".test"));
-    bson_empty(&empty);
-    mongo_find(&mongo_conn->conn, test, &empty, NULL, 0, 0, 0);
-    error =  mongo_cmd_get_last_error(&mongo_conn->conn, (char*)gridfs_loc_conf->db.data, NULL);
-    free(test);
-    if (error) {
-        ngx_log_error(NGX_LOG_ERR, log, 0, "Authentication Required");
-        return NGX_ERROR;
     }
 
     return NGX_OK;
@@ -515,27 +488,27 @@ static ngx_int_t ngx_http_mongo_add_connection(ngx_cycle_t* cycle, ngx_http_grid
         case mongo_conn_bad_arg:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Bad Arguments");
-            return NGX_ERROR;
+            break;
         case mongo_conn_no_socket:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: No Socket");
-            return NGX_ERROR;
+            break;
         case mongo_conn_fail:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Connection Failure.");
-            return NGX_ERROR;
+            break;
         case mongo_conn_not_master:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Not Master");
-            return NGX_ERROR;
+            break;
         case mongo_conn_bad_set_name:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Replica set name %s does not match.", gridfs_loc_conf->replset.data);
-            return NGX_ERROR;
+            break;
         case mongo_conn_cannot_find_primary:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Cannot connect to primary node.");
-            return NGX_ERROR;
+            break;
         default:
             ngx_log_error(NGX_LOG_ERR, cycle->log, 0,
                           "Mongo Exception: Unknown Error");
@@ -575,7 +548,7 @@ static ngx_int_t ngx_http_mongo_reconnect(ngx_log_t *log, ngx_http_mongo_connect
         if(&mongo_conn->conn.connected) { mongo_disconnect(&mongo_conn->conn); }
         ngx_msleep(MONGO_RECONNECT_WAITTIME);
         status = mongo_reconnect(&mongo_conn->conn);
-    } MONGO_CATCH_GENERIC(&mongo_conn->conn) { 
+    } MONGO_CATCH_GENERIC(&mongo_conn->conn) {
         status = mongo_conn_fail;
     }
 
@@ -605,7 +578,6 @@ static ngx_int_t ngx_http_mongo_reconnect(ngx_log_t *log, ngx_http_mongo_connect
                           "Mongo Exception: Unknown Error");
             return NGX_ERROR;
     }
-    
     return NGX_OK;
 }
 
@@ -706,7 +678,7 @@ static ngx_str_t ngx_substr(ngx_pool_t *pool, u_char* str, int start, int len) {
 static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
                                          ngx_file_t* tempfile,
                                          ngx_str_t* gridfs_cache_filename,
-					 bson_date_t date) {
+                                         bson_date_t date) {
   /* let nginx to close temp file, is it safe ? */
   //      ngx_close_file(tempfile.fd);
 
@@ -720,9 +692,9 @@ static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
                   tempfile->name.data,
                   gridfs_cache_filename->data);
   } else {
-    ngx_int_t err = ngx_set_file_time(gridfs_cache_filename->data,
-				      -1, /* useless */
-				      date / 1000 /* seconds */);
+    ngx_set_file_time(gridfs_cache_filename->data,
+                      -1, /* useless */
+                      date / 1000 /* seconds */);
   }
 }
 
@@ -971,9 +943,9 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
 
         if (tempfile_offset >= 0) {
           ngx_http_gridfs_rename_cache(request,
-				       &tempfile,
-				       &gridfs_cache_path,
-				       uploaddate);
+                                       &tempfile,
+                                       &gridfs_cache_path,
+                                       uploaddate);
         }
         buffer->pos = NULL;
         buffer->last = NULL;
@@ -1074,9 +1046,9 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     }
 
     if (tempfile_offset >= 0) ngx_http_gridfs_rename_cache(request,
-							   &tempfile,
-							   &gridfs_cache_path,
-							   uploaddate);
+                                                           &tempfile,
+                                                           &gridfs_cache_path,
+                                                           uploaddate);
 
     gridfile_destroy(&gfile);
     gridfs_destroy(&gfs);
