@@ -878,15 +878,15 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         ngx_is_file(&gfs_cache_fi)) {
       // Let default handler to return static file.
       if (ngx_file_mtime(&gfs_cache_fi) == uploaddate) {
-	ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-		      "Hit gridfs cache: %s\n", gridfs_cache_path.data);
-	request->uri = gridfspath;
-	return NGX_DECLINED;
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Hit gridfs cache: %s\n", gridfs_cache_path.data);
+        request->uri = gridfspath;
+        return NGX_DECLINED;
       } else {
-	// Delete outdated cache file.
-	ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-		      "Remove out-of-date cache: %s\n", gridfs_cache_path.data);
-	ngx_delete_file(gridfs_cache_path.data);
+        // Delete outdated cache file.
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Remove out-of-date cache: %s\n", gridfs_cache_path.data);
+        ngx_delete_file(gridfs_cache_path.data);
       }
     }
 
