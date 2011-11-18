@@ -859,7 +859,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     //    free(value);
 
     if(!found){
-      gridfile_destroy(&gfile);
+      //      gridfile_destroy(&gfile);
       gridfs_destroy(&gfs);
       ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                     "can't found file in mongdb.");
