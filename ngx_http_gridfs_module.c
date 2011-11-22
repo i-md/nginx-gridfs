@@ -1055,7 +1055,6 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
           tempfile_offset += chunk_len;
         }
 
-        mongo_cursor_destroy(cursors[i]);
         /* TODO: More Codes to Catch? */
         if (rc == NGX_ERROR) {
             gridfile_destroy(&gfile);
