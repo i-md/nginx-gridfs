@@ -571,7 +571,7 @@ static ngx_int_t ngx_http_mongo_reconnect(ngx_log_t *log, ngx_http_mongo_connect
         case MONGO_CONN_NOT_MASTER:
             ngx_log_error(NGX_LOG_ERR, log, 0,
                           "Mongo Exception: Not Master");
-            return NGX_ERROR;
+            break;
         case MONGO_CONN_BAD_SET_NAME:
             ngx_log_error(NGX_LOG_ERR, log, 0,
                           "Mongo Exception: Replica bad set name.");
@@ -799,16 +799,18 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
 
     ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                   "Start to init gridfs.");
+
+    int init_ret = MONGO_OK;
     do {
       e = FALSE;
-      int ret = gridfs_init(&mongo_conn->conn,
+      init_ret = gridfs_init(&mongo_conn->conn,
                             (const char*)gridfs_conf->db.data,
                             (const char*)gridfs_conf->root_collection.data,
                             &gfs);
 
       ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                     "Mongo connection with: %d", mongo_conn->conn.err);
-      if (ret == MONGO_ERROR && mongo_conn->conn.err != MONGO_CONN_SUCCESS) {
+      if (init_ret == MONGO_ERROR && mongo_conn->conn.err != MONGO_CONN_SUCCESS) {
         e = TRUE; ecounter++;
         if (ecounter > MONGO_MAX_RETRIES_PER_REQUEST
             || ngx_http_mongo_reconnect(request->connection->log, mongo_conn) == NGX_ERROR
@@ -820,6 +822,11 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         }
       }
     } while (e);
+
+    if (init_ret != MONGO_OK) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, "Can't init gridfs.");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
 
     bson_init(&query);
     switch (gridfs_conf->type) {
