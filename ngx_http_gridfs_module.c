@@ -688,11 +688,13 @@ static void ngx_http_gridfs_rename_cache(ngx_http_request_t* r,
                 "rename file from %s to %s.\n",
                 tempfile->name.data,
                 gridfs_cache_filename->data);
-  if (ngx_rename_file(tempfile->name.data, gridfs_cache_filename->data) != 0) {
+  int err = ngx_rename_file(tempfile->name.data, gridfs_cache_filename->data);
+  if (err != 0) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                  "can't rename file from %s to %s.\n",
+                  "can't rename file from %s to %s, with err %d.\n",
                   tempfile->name.data,
-                  gridfs_cache_filename->data);
+                  gridfs_cache_filename->data,
+		  err);
   } else {
     ngx_set_file_time(gridfs_cache_filename->data,
                       -1, /* useless */
