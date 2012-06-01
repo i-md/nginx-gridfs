@@ -737,7 +737,7 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
 
     // ---------- RETRIEVE KEY ---------- //
 
-    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, "Start to retrieve path.");
+    // ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, "Start to retrieve path.");
     location_name = core_conf->name;
     full_uri = request->uri;
 
@@ -845,8 +845,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     }
     bson_finish(&query);
 
-    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                  "Start to query gridfs.");
+    //ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+    //              "Start to query gridfs.");
     do {
       e = FALSE;
       found = gridfs_find_query(&gfs, &query, &gfile);
@@ -872,8 +872,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
     if (found == MONGO_ERROR){
       //      gridfile_destroy(&gfile);
       gridfs_destroy(&gfs);
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "can't found file in mongdb.");
+      //ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+      //              "can't found file in mongdb.");
       return NGX_HTTP_NOT_FOUND;
     }
 
@@ -889,8 +889,8 @@ static ngx_int_t ngx_http_gridfs_handler(ngx_http_request_t* request) {
         ngx_is_file(&gfs_cache_fi)) {
       if (ngx_file_mtime(&gfs_cache_fi) == uploaddate) {
         // Let default handler to return static file.
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Hit gridfs cache: %s\n", gridfs_cache_path.data);
+        //ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+        //              "Hit gridfs cache: %s\n", gridfs_cache_path.data);
         gridfile_destroy(&gfile);
         gridfs_destroy(&gfs);
         request->uri = gridfspath;
